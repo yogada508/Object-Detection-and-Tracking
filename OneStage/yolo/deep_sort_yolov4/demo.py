@@ -24,10 +24,20 @@ from collections import deque
 from keras import backend
 import tensorflow as tf
 from tensorflow.compat.v1 import InteractiveSession
+
+#module for serial listening
+import threading
+import time
+import random
+import serial
+
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = InteractiveSession(config=config)
 
+#serial listening settings
+PORT = '/dev/ttyACM0'
+detect = 0
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-i", "--input",help="path to input video", default = "./test_video/TownCentreXVID.avi")
@@ -56,6 +66,46 @@ def get_iou(bbox_ai, bbox_gt):
 
     return max(iou_area/all_area, 0)
 
+def listen(PORT):
+    global detect
+    print('Thread start listening')
+    print('Initial serial port......')    
+    COM_PORT = PORT    # 指定通訊埠名稱
+    BAUD_RATES = 9600    # 設定傳輸速率
+    ser = serial.Serial(COM_PORT, BAUD_RATES)   # 初始化序列通訊
+    time.sleep(2)
+    ser.write(b'reset\n')
+    print('Done')
+    time.sleep(1)
+
+    #倒數準備開始
+    for i in range (5,-1,-1):
+        time.sleep(1)
+        print(i)  
+
+    print('Thread : first back to player')
+    ser.write(b'start\n')
+
+    try:
+        while True:
+            data = ''
+            while ser.in_waiting:          # 若收到序列資料…
+                data_raw = ser.readline()  # 讀取一行
+                data = data_raw.decode().strip()   # 用預設的UTF-8解碼 去除句尾換行
+                #print('接收到的原始資料：', data_raw)
+                #print('接收到的資料:', data)
+                
+                if data == 'Arduino : start turn back':
+                    detect = 0
+                    print('Thread : back to player')
+                if data == 'Arduino : finish turn front':
+                    detect = 1
+                    print('Thread : face to player')
+       
+    except KeyboardInterrupt:
+        ser.close()    # 清除序列通訊物件
+        print('Exit!')
+
 def main(yolo):
 
     start = time.time()
@@ -73,7 +123,7 @@ def main(yolo):
     tracker = Tracker(metric)
 
     frame_index = -1
-    video_capture = cv2.VideoCapture(2)
+    video_capture = cv2.VideoCapture(0)
 
     ###########
     # initialize frame for movement detector
@@ -81,6 +131,13 @@ def main(yolo):
     avg = cv2.blur(frame, (4, 4))
     avg_float = np.float32(avg)
     ###########
+
+    ###########
+    # create thread to read serial input from arduino
+    t = threading.Thread(target = listen, args=(PORT,))
+    t.setDaemon(True)
+    t.start()
+    global detect
 
 
     fps = 0.0
@@ -205,7 +262,7 @@ def main(yolo):
                 #cv2.putText(frame, str(class_names[j]),(int(bbox[0]), int(bbox[1] -20)),0, 5e-3 * 150, (255,255,255),2)
 
                 
-        print(moving_record)
+        #print(moving_record)
 
         count = len(set(counter))
         cv2.putText(frame, "Total Pedestrian Counter: "+str(count),(int(20), int(120)),0, 5e-3 * 200, (0,255,0),2)
