@@ -31,13 +31,26 @@ import time
 import random
 import serial
 
+# module for mqtt
+import paho.mqtt.client as mqtt
+
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
 session = InteractiveSession(config=config)
 
 #serial listening settings
-PORT = '/dev/ttyACM0'
+PORT = '/dev/ttyUSB0'
 detect = 0
+
+#mqtt setting
+mqtt_topic = "Nano/player/IMU"
+mqtt_broker_ip = "140.113.213.21"
+mqtt_topic_pulish = "Server/player/ANS"
+
+client = mqtt.Client()
+player_flag = [0, 0, 0]
+player_camera_move = [0,0,0]
+player_list = ["player001", "player002", "player003"]
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-i", "--input",help="path to input video", default = "./test_video/TownCentreXVID.avi")
@@ -106,6 +119,36 @@ def listen(PORT):
         ser.close()    # 清除序列通訊物件
         print('Exit!')
 
+def readSensor():
+    global detect,client
+    def on_connect(client, userdata, flags, rc):
+        print("Connected!", str(rc))
+        client.subscribe(mqtt_topic)
+    
+    def on_message(client, userdata, msg):
+        global flag
+        get_message = str(msg.payload)
+        get_message = get_message.split("'")[1]
+        get_list = get_message.split(", ")
+        #print("Topic: ", msg.topic + "\nMessage: " + get_message)
+        #print(get_list)
+        try:
+            if float(get_list[3]) > 1: # 這裡可以換成判斷玩家在動的標準
+                who = player_list.index(get_list[0])
+                if player_flag[who] == 0 and detect == 1:
+                    client.publish(mqtt_topic_pulish,str(who+1))
+                    print(get_list[0] + " move !")
+                    player_flag[who] = 1
+                    print(player_flag)
+        except:
+            pass
+
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(mqtt_broker_ip, 1883)
+    client.loop_forever()
+    client.disconnect()
+
 def main(yolo):
 
     start = time.time()
@@ -138,6 +181,13 @@ def main(yolo):
     t.setDaemon(True)
     t.start()
     global detect
+
+    #create thread to read sensor data
+    t2 = threading.Thread(target = readSensor)
+    t2.setDaemon(True)
+    t2.start()
+    global client
+    ###########
 
 
     fps = 0.0
@@ -261,8 +311,14 @@ def main(yolo):
                 cv2.line(frame,(pts[track.track_id][j-1]), (pts[track.track_id][j]),(color),thickness)
                 #cv2.putText(frame, str(class_names[j]),(int(bbox[0]), int(bbox[1] -20)),0, 5e-3 * 150, (255,255,255),2)
 
-                
-        #print(moving_record)
+        if detect == 1:
+            index = 0
+            for person,move in moving_record:
+                if move > 0.5 and player_camera_move[index] == 0:
+                    print(f'player{index} camera move')
+                    player_camera_move[index] = 1
+                    client.publish(mqtt_topic_pulish,str(index+1))
+                index += 1
 
         count = len(set(counter))
         cv2.putText(frame, "Total Pedestrian Counter: "+str(count),(int(20), int(120)),0, 5e-3 * 200, (0,255,0),2)
